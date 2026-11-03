@@ -1,11 +1,11 @@
 
+import { NCEngine } from '@nexconn/chat';
+import type { ServiceHooks } from '@nexconn/chatui';
 import {
-  DirectChannel,
-  MessageHandler,
-  NCEngine,
-  SendTextMessageParams,
-} from '@nexconn/chat';
-import { useEffect, useState } from 'react';
+  NCChatUIApplication,
+} from '@nexconn/chatui';
+
+import { useEffect, useRef, useState } from 'react';
 
 let connectionPromise: Promise<string> | null = null;
 
@@ -13,6 +13,7 @@ function connectToNexconn(): Promise<string> {
   if (!connectionPromise) {
     connectionPromise = (async () => {
       const appKey = import.meta.env.VITE_NEXCONN_APP_KEY;
+
       const userId =
         new URLSearchParams(window.location.search).get('user') === '2'
           ? '2'
@@ -23,10 +24,40 @@ function connectToNexconn(): Promise<string> {
           ? import.meta.env.VITE_NEXCONN_USER_2_TOKEN
           : import.meta.env.VITE_NEXCONN_TEST_TOKEN;
 
-      if (!appKey || !token) throw new Error('Missing credentials');
+      if (!appKey || !token) {
+        throw new Error('Missing Nexconn credentials');
+      }
 
+      // Initialize Nexconn Engine
       NCEngine.initialize({ appKey });
 
+      // Temporary hooks for testing
+      const hooks: ServiceHooks = {
+        reqUserProfiles: async () => [],
+        reqGroupProfiles: async () => [],
+        reqSystemProfiles: async () => [],
+        reqGroupMembers: async () => [],
+      };
+
+      // Initialize ChatUI
+      const chatApp = NCChatUIApplication.initialize({
+        hooks,
+        language: 'en_US',
+      });
+
+      if (!chatApp) {
+        throw new Error('ChatUI initialization failed');
+      }
+
+      // Register ChatUI custom elements
+      chatApp.ready();
+
+      console.log(
+        'ChatUI provider:',
+        customElements.get('nc-chat-ui-app-provider')
+      );
+
+      // Connect selected user
       const result = await NCEngine.connect({ token });
 
       if (result.code !== 0) {
@@ -42,10 +73,11 @@ function connectToNexconn(): Promise<string> {
 
 function App() {
   const [userId, setUserId] = useState('');
-  const [status, setStatus] = useState('Connecting...');
-  const [messages, setMessages] = useState<string[]>([]);
-  const [input, setInput] = useState('');
+  const [status, setStatus] = useState('Connecting to Nexconn...');
 
+  const chatRootRef = useRef<HTMLDivElement>(null);
+
+  // Connect to Nexconn
   useEffect(() => {
     let active = true;
 
@@ -55,25 +87,17 @@ function App() {
 
         setUserId(id);
         setStatus(`Connected as User ${id}`);
-
-        NCEngine.addMessageHandler(
-          `recoverx-handler-${id}`,
-          new MessageHandler({
-            onMessageReceived({ messages }) {
-              messages.forEach(msg => {
-                  const data = msg as any;
-
-                  setMessages(previous => [
-                        ...previous,
-                       `User ${data.senderUserId}: ${data._content?.text ?? 'Message received'}`,
-                  ]);
-              });
-            },
-          })
-        );
       })
       .catch(error => {
-        if (active) setStatus(`Error: ${error.message}`);
+        if (active) {
+          setStatus(
+            `Error: ${
+              error instanceof Error
+                ? error.message
+                : String(error)
+            }`
+          );
+        }
       });
 
     return () => {
@@ -81,65 +105,49 @@ function App() {
     };
   }, []);
 
-  async function sendMessage() {
-    if (!input.trim()) return;
+  // Mount ChatUI after initialization
+  useEffect(() => {
+    if (!userId || !chatRootRef.current) return;
 
-    try {
-      const receiverId = userId === '1' ? '2' : '1';
-      const channel = new DirectChannel(receiverId);
+    const provider = document.createElement(
+      'nc-chat-ui-app-provider'
+    );
 
-      const params = new SendTextMessageParams({
-        text: input,
-      });
+    chatRootRef.current.replaceChildren(provider);
 
-      const result = await channel.sendMessage(params);
+    console.log('ChatUI provider mounted');
 
-      if (result.code === 0) {
-        setMessages(previous => [
-          ...previous,
-          `You: ${input}`,
-        ]);
-        setInput('');
-      } else {
-        setStatus(`Send failed: ${result.code}`);
-      }
-    } catch (error) {
-      setStatus(
-        `Send error: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
+    return () => {
+      chatRootRef.current?.replaceChildren();
+    };
+  }, [userId]);
 
   return (
-    <div style={{ padding: 30, fontFamily: 'Arial' }}>
-      <h1>RecoverX Chat</h1>
-      <h3>{status}</h3>
-      <p>Logged in as User {userId}</p>
+    <div
+      style={{
+        fontFamily: 'Arial, sans-serif',
+        padding: 20,
+      }}
+    >
+      <h2>RecoverX Chat</h2>
 
-      <div style={{
-        border: '1px solid #ccc',
-        padding: 15,
-        minHeight: 200,
-        marginBottom: 15
-      }}>
-        <h3>Messages</h3>
-        {messages.map((msg, index) => (
-          <p key={index}>{msg}</p>
-        ))}
-      </div>
+      <p>{status}</p>
 
-      <input
-        value={input}
-        onChange={e => setInput(e.target.value)}
-        placeholder="Type a message..."
-        style={{ padding: 10, width: 250 }}
+      {userId && (
+        <p>Logged in as User {userId}</p>
+      )}
+
+      <div
+        ref={chatRootRef}
+        id="chatui-root"
+        style={{
+          height: '75vh',
+          width: '100%',
+          border: '1px solid #ccc',
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}
       />
-
-      <button onClick={sendMessage} style={{ padding: 10 }}>
-        Send
-      </button>
     </div>
   );
 }
